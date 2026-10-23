@@ -244,6 +244,12 @@ def save_cache(key, workspace):
         print("Cache: not saved (" + type(error).__name__ + ")", flush=True)
 
 
+def fingerprints():
+    """Names of the units in the target directory's fingerprint dirs."""
+    return {entry.name for profile in cache.profile_dirs(TARGET)
+            for entry in (profile / ".fingerprint").iterdir()}
+
+
 def cargo_home():
     return Path(os.environ.get("CARGO_HOME") or Path.home() / ".cargo")
 
@@ -287,7 +293,11 @@ def main():
             fuzz = ["cargo", "+nightly", "fuzz"]
             options = ["--target", FUZZ_TRIPLE, "--target-dir", str(TARGET)]
             # Built once; each run then reuses the build.
+            before = fingerprints()
             if stage("Fuzz build", fuzz + ["build", *options], root, count=True, explain=True) is not None:
+                # Units keep their directory when rebuilt in place; a cache whose
+                # units all changed names was built with different inputs.
+                print(f"Fuzz build: {len(before & fingerprints())} of {len(before)} restored units kept", flush=True)
                 for target in mine:
                     stage("Fuzz", fuzz + ["run", *options, target, "--", "-max_total_time=60"], root, target=target)
         else:

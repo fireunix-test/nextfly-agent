@@ -53,6 +53,6 @@ class RequiredNamesTests(unittest.TestCase):
         jobs=[{'name':name,'conclusion':'success'} for name in required]
         self.assertTrue(successful(jobs+[{'name':'setup','conclusion':'success'}],required))
         self.assertEqual({j['name'] for j in jobs if j['name'].startswith('fuzz')},
-                         {'fuzz (1/4)','fuzz (2/4)','fuzz (3/4)','fuzz (4/4)'})
-        self.assertFalse(successful([j for j in jobs if j['name']!='fuzz (2/4)'],required))
+                         {f'fuzz ({i}/7)' for i in range(1, 8)})
+        self.assertFalse(successful([j for j in jobs if j['name']!='fuzz (2/7)'],required))
         self.assertFalse(successful(jobs+[jobs[0]],required))

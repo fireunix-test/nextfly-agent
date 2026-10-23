@@ -21,7 +21,7 @@ concurrency:
 permissions:
   contents: write
 env:
-  REPORT_EXPECTED: '["check (ubuntu-latest)", "check (macos-latest)", "check (windows-latest)", "fuzz (1/4)", "fuzz (2/4)", "fuzz (3/4)", "fuzz (4/4)"]'
+  REPORT_EXPECTED: '["check (ubuntu-latest)", "check (macos-latest)", "check (windows-latest)", "fuzz (1/7)", "fuzz (2/7)", "fuzz (3/7)", "fuzz (4/7)", "fuzz (5/7)", "fuzz (6/7)", "fuzz (7/7)"]'
 jobs:
   check:
     if: github.ref == 'refs/heads/main'
@@ -136,14 +136,14 @@ jobs:
         run: python scripts/report.py
   fuzz:
     if: github.ref == 'refs/heads/main'
-    name: fuzz (${{ matrix.shard }}/4)
+    name: fuzz (${{ matrix.shard }}/7)
     timeout-minutes: 120
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         # Must match FUZZ_SHARDS in scripts/checks.py.
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -192,7 +192,7 @@ jobs:
           SOURCE_SHA: ${{ inputs.source_sha }}
           HEAD_SHA: ${{ inputs.head_sha }}
           PR_NUMBER: ${{ inputs.pr_number }}
-          REPORT_JOB: ${{ format('fuzz ({0}/4)', matrix.shard) }}
+          REPORT_JOB: ${{ format('fuzz ({0}/7)', matrix.shard) }}
           REPORT_PLATFORM: ubuntu-latest
           FUZZ_SHARD: ${{ matrix.shard }}
         run: python scripts/build.py fuzz "$FUZZ_SHARD"
@@ -222,6 +222,6 @@ jobs:
           HEAD_SHA: ${{ inputs.head_sha }}
           PR_NUMBER: ${{ inputs.pr_number }}
           BUILD_OUTCOME: ${{ steps.build.outcome }}
-          REPORT_JOB: ${{ format('fuzz ({0}/4)', matrix.shard) }}
+          REPORT_JOB: ${{ format('fuzz ({0}/7)', matrix.shard) }}
           REPORT_PLATFORM: ubuntu-latest
         run: python scripts/report.py

@@ -6,7 +6,7 @@ import tomllib
 PLATFORMS = ('ubuntu-latest', 'macos-latest', 'windows-latest')
 # Fuzz jobs; each builds the fuzz crate once and runs every FUZZ_SHARDS-th
 # target of the tested revision's manifest, so all targets are always covered.
-FUZZ_SHARDS = 4
+FUZZ_SHARDS = 7
 
 
 def required_names(targets):

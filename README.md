@@ -104,8 +104,8 @@ without `retry_pr` afterward for immediate status reconciliation. Prefer all job
 not failed jobs only, so the new report attempt includes every platform. New
 commits or changes to the merge revision trigger fresh CI automatically.
 
-Completion verifies three named platform checks and four fuzz shards. Each shard
-builds the fuzz crate once and runs every fourth target of the **tested
+Completion verifies three named platform checks and seven fuzz shards. Each shard
+builds the fuzz crate once and runs every seventh target of the **tested
 revision's** `fuzz/Cargo.toml` for 60 seconds, so new targets need no workflow
 change; the private report names each failing target. Missing checks and skipped
 required checks fail closed; extra orchestration jobs do not alter the required
