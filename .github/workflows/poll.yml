@@ -1,0 +1,43 @@
+name: Poll private PRs
+on:
+  schedule:
+    - cron: '2-59/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      retry_pr:
+        description: PR number to retry using current builder code (leave empty for reconciliation)
+        required: false
+        type: string
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: private-pr-poller
+  cancel-in-progress: false
+jobs:
+  poll:
+    # Idle until the GitHub App is configured; see README.
+    if: vars.APP_CLIENT_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Mint a token for the private source
+        id: source
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: fireunix-nextfly
+          repositories: agent
+          permission-contents: read
+          permission-pull-requests: read
+          permission-statuses: write
+      - name: Reconcile revisions and results
+        env:
+          RETRY_PR: ${{ inputs.retry_pr }}
+          SOURCE_TOKEN: ${{ steps.source.outputs.token }}
+          BUILDER_TOKEN: ${{ github.token }}
+        run: python3 scripts/poll.py

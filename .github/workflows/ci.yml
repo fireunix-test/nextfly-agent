@@ -1,0 +1,156 @@
+name: Private source CI
+run-name: Build ${{ inputs.request_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      head_sha:
+        required: true
+        type: string
+      pr_number:
+        required: true
+        type: string
+      request_id:
+        required: true
+        type: string
+concurrency:
+  group: private-ci-${{ inputs.pr_number }}
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  check:
+    if: github.ref == 'refs/heads/main'
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install Rust tools before fetching source
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Select stable Rust
+        run: rustup default stable
+      - if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@e77cc62a22a374a4d0668286007cc3e3b4c17760 # v1
+      - if: runner.os == 'Linux'
+        name: Install Valgrind before fetching source
+        run: sudo apt-get update -q && sudo apt-get install -y -q valgrind
+      - name: Mint a read-only token for the private source
+        id: source
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: fireunix-nextfly
+          repositories: agent
+          permission-contents: read
+          permission-pull-requests: read
+      - name: Run private checks
+        id: build
+        env:
+          SOURCE_TOKEN: ${{ steps.source.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          REPORT_JOB: ${{ format('check ({0})', matrix.os) }}
+          REPORT_PLATFORM: ${{ matrix.os }}
+        run: python scripts/build.py check
+      - name: Mint a token for the private report
+        if: always() && inputs.pr_number != '0'
+        id: report
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: fireunix-nextfly
+          repositories: agent
+          permission-pull-requests: write
+      - name: Report privately to the PR
+        if: always() && inputs.pr_number != '0'
+        timeout-minutes: 5
+        env:
+          REPORT_TOKEN: ${{ steps.report.outputs.token }}
+          BUILDER_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          REPORT_JOB: ${{ format('check ({0})', matrix.os) }}
+          REPORT_PLATFORM: ${{ matrix.os }}
+          REPORT_EXPECTED: '["check (ubuntu-latest)", "check (macos-latest)", "check (windows-latest)", "fuzz (bencode_decode)", "fuzz (krpc_decode)", "fuzz (bt_wire)", "fuzz (torrent_info)", "fuzz (metainfo)", "fuzz (utp_conn)", "fuzz (client_hello)", "fuzz (ja3_import)", "fuzz (http1_response)", "fuzz (proxy_reply)", "fuzz (content_range)", "fuzz (content_disposition)", "fuzz (ftp_reply)", "fuzz (m3u8)", "fuzz (bt_mse)", "fuzz (bt_pex)", "fuzz (bt_peer)", "fuzz (tracker_http)", "fuzz (tracker_udp)", "fuzz (nat_ssdp)", "fuzz (nat_upnp)", "fuzz (nat_pcp)", "fuzz (bt_holepunch)", "fuzz (bt_lsd)", "fuzz (thunder_wire)", "fuzz (thunder_transport)"]'
+        run: python scripts/report.py
+  fuzz:
+    if: github.ref == 'refs/heads/main'
+    timeout-minutes: 120
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [bencode_decode, krpc_decode, bt_wire, torrent_info, metainfo, utp_conn, client_hello, ja3_import, http1_response, proxy_reply, content_range, content_disposition, ftp_reply, m3u8, bt_mse, bt_pex, bt_peer, tracker_http, tracker_udp, nat_ssdp, nat_upnp, nat_pcp, bt_holepunch, bt_lsd, thunder_wire, thunder_transport]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install nightly Rust before fetching source
+        run: rustup toolchain install nightly --profile minimal
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+        with:
+          tool: cargo-fuzz
+      - name: Mint a read-only token for the private source
+        id: source
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: fireunix-nextfly
+          repositories: agent
+          permission-contents: read
+          permission-pull-requests: read
+      - name: Run private fuzz smoke test
+        id: build
+        env:
+          SOURCE_TOKEN: ${{ steps.source.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          REPORT_JOB: ${{ format('fuzz ({0})', matrix.target) }}
+          REPORT_PLATFORM: ubuntu-latest
+          FUZZ_TARGET: ${{ matrix.target }}
+        run: python scripts/build.py fuzz "$FUZZ_TARGET"
+      - name: Mint a token for the private report
+        if: always() && inputs.pr_number != '0'
+        id: report
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: fireunix-nextfly
+          repositories: agent
+          permission-pull-requests: write
+      - name: Report privately to the PR
+        if: always() && inputs.pr_number != '0'
+        timeout-minutes: 5
+        env:
+          REPORT_TOKEN: ${{ steps.report.outputs.token }}
+          BUILDER_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          REPORT_JOB: ${{ format('fuzz ({0})', matrix.target) }}
+          REPORT_PLATFORM: ubuntu-latest
+          REPORT_EXPECTED: '["check (ubuntu-latest)", "check (macos-latest)", "check (windows-latest)", "fuzz (bencode_decode)", "fuzz (krpc_decode)", "fuzz (bt_wire)", "fuzz (torrent_info)", "fuzz (metainfo)", "fuzz (utp_conn)", "fuzz (client_hello)", "fuzz (ja3_import)", "fuzz (http1_response)", "fuzz (proxy_reply)", "fuzz (content_range)", "fuzz (content_disposition)", "fuzz (ftp_reply)", "fuzz (m3u8)", "fuzz (bt_mse)", "fuzz (bt_pex)", "fuzz (bt_peer)", "fuzz (tracker_http)", "fuzz (tracker_udp)", "fuzz (nat_ssdp)", "fuzz (nat_upnp)", "fuzz (nat_pcp)", "fuzz (bt_holepunch)", "fuzz (bt_lsd)", "fuzz (thunder_wire)", "fuzz (thunder_transport)"]'
+        run: python scripts/report.py
