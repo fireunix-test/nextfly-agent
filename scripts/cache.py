@@ -263,7 +263,9 @@ def main():
         raise ValueError('Invalid request')
     # Output from another compiler is useless, so only its own toolchain's
     # caches are candidates; a different lockfile still restores most crates.
-    prefix = f"v1-{os.environ['RUNNER_OS']}-{kind}-{toolchain_digest(kind)}-"
+    # Bumping a kind's version drops its caches: fuzz v1 held no build output.
+    version = {'check': 'v1', 'fuzz': 'v2'}[kind]
+    prefix = f"{version}-{os.environ['RUNNER_OS']}-{kind}-{toolchain_digest(kind)}-"
     key = prefix + lock_digest(os.environ.pop('SOURCE_TOKEN'), os.environ['SOURCE_SHA'], kind)
     with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
         output.write(f'key={key}\nprefix={prefix}\n')

@@ -222,7 +222,7 @@ def restore_cache(key):
     error = cache.unpack(CACHE_BLOB, key, cargo_home(), TARGET)
     CACHE_BLOB.unlink(missing_ok=True)
     # Only the error type: messages can hold private paths.
-    print("Cache: " + ("restored" if error is None else "unusable (" + error + ")"), flush=True)
+    print("Cache: " + (f"restored ({len(fingerprints())} units)" if error is None else "unusable (" + error + ")"), flush=True)
 
 
 def save_cache(key, workspace):
@@ -234,10 +234,15 @@ def save_cache(key, workspace):
         # Captured output merges stderr, where Cargo may report downloads.
         metadata = next(line for line in output.splitlines() if line.startswith(b"{"))
         cache.prune(TARGET, cache.third_party(json.loads(metadata)))
+        units = len(fingerprints())
+        if not units:
+            # A cache without build output would hold its key and help nothing.
+            print(f"Cache: not saved (no units in {len(cache.profile_dirs(TARGET))} profiles)", flush=True)
+            return
         cache.pack(CACHE_BLOB, key, cargo_home(), TARGET)
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
             output.write("cache=written\n")
-        print("Cache: sealed", flush=True)
+        print(f"Cache: sealed ({units} units)", flush=True)
     except Exception as error:
         CACHE_BLOB.unlink(missing_ok=True)
         # Only the error type: messages can hold private paths.
@@ -246,6 +251,8 @@ def save_cache(key, workspace):
 
 def fingerprints():
     """Names of the units in the target directory's fingerprint dirs."""
+    if not TARGET.is_dir():
+        return set()
     return {entry.name for profile in cache.profile_dirs(TARGET)
             for entry in (profile / ".fingerprint").iterdir()}
 
