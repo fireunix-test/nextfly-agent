@@ -22,16 +22,44 @@ MARKER = '<!-- external-ci-report -->'
 STATE = re.compile(r'<!-- external-ci-state:([A-Za-z0-9+/=]+) -->')
 
 
+# The API call in progress, named in a failure without its private details.
+PHASE = 'setup'
+# Waits after a secondary rate limit when GitHub names no Retry-After.
+BACKOFF = (10, 20, 40)
+
+
+def rate_limited(error):
+    """Whether a 403 or 429 is a rate limit, which passes, rather than a
+    refusal. The body is read here only, never printed."""
+    if error.code not in (403, 429):
+        return False
+    if error.headers.get('Retry-After') or error.headers.get('X-RateLimit-Remaining') == '0':
+        return True
+    try:
+        return b'rate limit' in error.read().lower()
+    except Exception:
+        return False
+
+
 def api(repo, path, data=None, method=None):
     token = os.environ['REPORT_TOKEN' if repo == SOURCE else 'BUILDER_TOKEN']
-    request = urllib.request.Request('https://api.github.com/repos/'+repo+path,
-        data=None if data is None else json.dumps(data).encode(), method=method,
-        headers={'Authorization':'Bearer '+token, 'Accept':'application/vnd.github+json',
-                 'X-GitHub-Api-Version':'2022-11-28', 'User-Agent':'nextfly-ci-report',
-                 'Content-Type':'application/json'})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        raw = response.read()
-        return json.loads(raw) if raw else None
+    for attempt in range(len(BACKOFF) + 1):
+        request = urllib.request.Request('https://api.github.com/repos/'+repo+path,
+            data=None if data is None else json.dumps(data).encode(), method=method,
+            headers={'Authorization':'Bearer '+token, 'Accept':'application/vnd.github+json',
+                     'X-GitHub-Api-Version':'2022-11-28', 'User-Agent':'nextfly-ci-report',
+                     'Content-Type':'application/json'})
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                raw = response.read()
+                return json.loads(raw) if raw else None
+        except urllib.error.HTTPError as error:
+            if attempt == len(BACKOFF) or not rate_limited(error):
+                raise
+            retry = error.headers.get('Retry-After', '')
+            wait = int(retry) if retry.isdigit() else BACKOFF[attempt]
+            print(f'Private PR report: rate limited at {PHASE}, retrying in {min(wait, 60)} s', flush=True)
+            time.sleep(min(wait, 60))
 
 
 def pages(repo, path):
@@ -52,6 +80,8 @@ def write_lock():
     """
     ref = 'tags/ci-report-lock-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']
     deadline = time.monotonic()+180
+    global PHASE
+    PHASE = 'lock'
     while True:
         try:
             api(BUILDER, '/git/refs', {'ref':'refs/'+ref, 'sha':os.environ['GITHUB_SHA']})
@@ -63,6 +93,7 @@ def write_lock():
     try:
         yield
     finally:
+        PHASE = 'unlock'
         api(BUILDER, '/git/refs/'+ref, method='DELETE')
 
 
@@ -115,6 +146,7 @@ def render(state):
 
 
 def main():
+    global PHASE
     pr = os.environ['PR_NUMBER']
     if pr == '0':
         return
@@ -142,12 +174,15 @@ def main():
             failure['summary'] = bounded(redact(failure['summary']))
         with write_lock():
             # Revalidate inside the lock, immediately before reading or writing comments.
+            PHASE = 'repository'
             if not api(SOURCE, '')['private']:
                 raise ValueError('Report destination must be private')
+            PHASE = 'pull request'
             pull = api(SOURCE, '/pulls/'+pr)
             if (pull['state']!='open' or pull['head']['sha']!=head or pull['merge_commit_sha']!=merge
                     or pull['head']['repo']['full_name']!=SOURCE):
                 return
+            PHASE = 'comments'
             comments = [c for c in pages(SOURCE, '/issues/'+pr+'/comments') if c['body'].startswith(MARKER)]
             if len(comments)>1:
                 raise ValueError('Multiple report comments require review')
@@ -159,6 +194,7 @@ def main():
                 state = {'run':run, 'attempt':attempt, 'head':head, 'merge':merge, 'expected':names, 'entries':{}}
             state['entries'][name] = {'platform':os.environ['REPORT_PLATFORM'], 'passed':not failures, 'failures':failures}
             body = render(state)
+            PHASE = 'comment update'
             if comment:
                 api(SOURCE, '/issues/comments/'+str(comment['id']), {'body':body}, method='PATCH')
             else:
@@ -175,5 +211,5 @@ if __name__ == '__main__':
         # API responses and exceptions can contain private comment bodies:
         # only the error type and HTTP status are printed.
         status = f' {error.code}' if isinstance(error, urllib.error.HTTPError) else ''
-        print('Private PR report: failed (' + type(error).__name__ + status + ')', flush=True)
+        print('Private PR report: failed (' + type(error).__name__ + status + ' at ' + PHASE + ')', flush=True)
         sys.exit(1)

@@ -38,6 +38,27 @@ class ReportTests(unittest.TestCase):
         self.assertIn('已截断',body)
         self.assertEqual(len(report.unpack(body)['entries']),2)
 
+    def test_rate_limits_are_retried_and_refusals_are_not(self):
+        import email.message
+        def error(code, headers=None, body=b''):
+            message = email.message.Message()
+            for key, value in (headers or {}).items():
+                message[key] = value
+            return urllib.error.HTTPError('https://api.github.com', code, 'x', message, io.BytesIO(body))
+        class Response(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+        env = {'REPORT_TOKEN':'t', 'BUILDER_TOKEN':'t'}
+        with patch.dict(os.environ, env), patch.object(report.time, 'sleep') as sleep:
+            with patch.object(report.urllib.request, 'urlopen', side_effect=[
+                    error(403, {'Retry-After':'3'}), error(403, body=b'You have exceeded a secondary rate limit'),
+                    Response(b'{"ok": true}')]):
+                self.assertEqual(report.api(report.SOURCE, ''), {'ok': True})
+            self.assertEqual([c.args[0] for c in sleep.call_args_list], [3, 20])
+            with patch.object(report.urllib.request, 'urlopen', side_effect=[error(403, body=b'Resource not accessible')]):
+                with self.assertRaises(urllib.error.HTTPError):
+                    report.api(report.SOURCE, '')
+
     def test_success_requires_every_job(self):
         state=self.state()
         for name in state['expected']:
