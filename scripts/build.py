@@ -115,17 +115,33 @@ def compiled(output):
     return sum(1 for line in output.splitlines() if line.lstrip().startswith((b"Compiling ", b"Checking ")))
 
 
-def stage(name, args, root, capture=False, target=None, count=False):
+def dirty_reasons(output):
+    """Why Cargo rebuilt crates, as reason kinds only (from fingerprint
+    logging): shows why a restored cache was not used, and names nothing."""
+    kinds = {}
+    for match in re.finditer(rb"dirty: ([A-Za-z]+)|(fingerprint error)", output):
+        # A fingerprint error means the unit's fingerprint file is missing.
+        kind = match.group(1).decode() if match.group(1) else "Missing"
+        kinds[kind] = kinds.get(kind, 0) + 1
+    return ", ".join(f"{kind} x{n}" for kind, n in sorted(kinds.items())) or "none"
+
+
+def stage(name, args, root, capture=False, target=None, count=False, explain=False):
     label = name + (" (" + target + ")" if target else "")
     print(label + ": running", flush=True)
+    env = child_env()
+    if explain:
+        env["CARGO_LOG"] = "cargo::core::compiler::fingerprint=info"
     try:
-        result = run(args, root, capture=capture or count, timeout=2400 if name == "Tests" else 1200)
+        result = run(args, root, env=env, capture=capture or count or explain, timeout=2400 if name == "Tests" else 1200)
     except CommandFailure as failure:
         summary = extract(name, failure.output, failure.code, failure.timeout, target, root)
         FAILURES.append({"stage": label, "summary": bounded(redact(summary, ENVIRONMENT, root))})
         print(label + ": failed", flush=True)
         return None
     print(label + ": passed" + (f" ({compiled(result)} crates built)" if count else ""), flush=True)
+    if explain:
+        print(label + ": rebuild reasons: " + dirty_reasons(result), flush=True)
     return result
 
 
@@ -271,7 +287,7 @@ def main():
             fuzz = ["cargo", "+nightly", "fuzz"]
             options = ["--target", FUZZ_TRIPLE, "--target-dir", str(TARGET)]
             # Built once; each run then reuses the build.
-            if stage("Fuzz build", fuzz + ["build", *options], root, count=True) is not None:
+            if stage("Fuzz build", fuzz + ["build", *options], root, count=True, explain=True) is not None:
                 for target in mine:
                     stage("Fuzz", fuzz + ["run", *options, target, "--", "-max_total_time=60"], root, target=target)
         else:
