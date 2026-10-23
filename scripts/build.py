@@ -109,17 +109,23 @@ def validate(token):
     return sha
 
 
-def stage(name, args, root, capture=False, target=None):
+def compiled(output):
+    """How many crates Cargo built: shows whether a cache was used, and
+    names nothing."""
+    return sum(1 for line in output.splitlines() if line.lstrip().startswith((b"Compiling ", b"Checking ")))
+
+
+def stage(name, args, root, capture=False, target=None, count=False):
     label = name + (" (" + target + ")" if target else "")
     print(label + ": running", flush=True)
     try:
-        result = run(args, root, capture=capture, timeout=2400 if name == "Tests" else 1200)
+        result = run(args, root, capture=capture or count, timeout=2400 if name == "Tests" else 1200)
     except CommandFailure as failure:
         summary = extract(name, failure.output, failure.code, failure.timeout, target, root)
         FAILURES.append({"stage": label, "summary": bounded(redact(summary, ENVIRONMENT, root))})
         print(label + ": failed", flush=True)
         return None
-    print(label + ": passed", flush=True)
+    print(label + ": passed" + (f" ({compiled(result)} crates built)" if count else ""), flush=True)
     return result
 
 
@@ -265,14 +271,14 @@ def main():
             fuzz = ["cargo", "+nightly", "fuzz"]
             options = ["--target", FUZZ_TRIPLE, "--target-dir", str(TARGET)]
             # Built once; each run then reuses the build.
-            if stage("Fuzz build", fuzz + ["build", *options], root) is not None:
+            if stage("Fuzz build", fuzz + ["build", *options], root, count=True) is not None:
                 for target in mine:
                     stage("Fuzz", fuzz + ["run", *options, target, "--", "-max_total_time=60"], root, target=target)
         else:
             if sys.platform.startswith("linux"):
                 stage("Formatting", ["cargo", "fmt", "--all", "--check"], root)
-            stage("Clippy", ["cargo", "clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"], root)
-            stage("Tests", ["cargo", "test", "--workspace", "--locked", "--no-fail-fast"], root)
+            stage("Clippy", ["cargo", "clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"], root, count=True)
+            stage("Tests", ["cargo", "test", "--workspace", "--locked", "--no-fail-fast"], root, count=True)
             if sys.platform.startswith("linux"):
                 for crate, test in (("na-net", "udp"), ("na-dht", "load"), ("na-http", "throughput"), ("na-bt", "load")):
                     if not (root / "crates" / crate / "tests" / (test + ".rs")).is_file():

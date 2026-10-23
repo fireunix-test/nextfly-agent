@@ -93,12 +93,15 @@ class PackTests(unittest.TestCase):
             (home / 'bin' / 'tool').write_bytes(b'not cached')
             (target / 'debug' / 'deps').mkdir(parents=True)
             (target / 'debug' / 'deps' / 'x.rlib').write_bytes(b'rlib' * 1000)
+            # Cargo hard-links build script binaries and uplifted files.
+            os.link(target / 'debug' / 'deps' / 'x.rlib', target / 'debug' / 'deps' / 'y.rlib')
             cache.pack(blob, KEY, home, target)
             self.assertNotIn(b'rlibrlib', blob.read_bytes())
             new_home, new_target = root / 'h2', root / 't2'
             self.assertIsNone(cache.unpack(blob, KEY, new_home, new_target))
             self.assertEqual((new_home / 'registry' / 'cache' / 'a.crate').read_bytes(), b'crate')
             self.assertEqual((new_target / 'debug' / 'deps' / 'x.rlib').read_bytes(), b'rlib' * 1000)
+            self.assertEqual((new_target / 'debug' / 'deps' / 'y.rlib').read_bytes(), b'rlib' * 1000)
             self.assertFalse((new_home / 'bin').exists())
             # A wrong key restores nothing and leaves no partial state.
             other_home, other_target = root / 'h3', root / 't3'

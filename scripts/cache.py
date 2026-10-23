@@ -219,6 +219,13 @@ def unpack(blob, key, cargo_home, target):
                     else:
                         raise ValueError('Unexpected cache member')
                     member.name = rest
+                    if member.islnk():
+                        # Cargo hard-links files; a link names its target by
+                        # archive path, which loses the same root.
+                        link_head, _, link_rest = member.linkname.partition('/')
+                        if link_head != head or not link_rest:
+                            raise ValueError('Link across cache roots')
+                        member.linkname = link_rest
                     tar.extract(member, dest, filter='data')
         return None
     except Exception as error:
