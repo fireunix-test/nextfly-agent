@@ -202,7 +202,8 @@ def pack(blob, key, cargo_home, target):
 
 
 def unpack(blob, key, cargo_home, target):
-    """Restores a sealed cache; on any failure removes what it restored."""
+    """Restores a sealed cache. Returns `None`, or on failure the error's type
+    name after removing what it restored."""
     try:
         with open(blob, 'rb') as source, io.BufferedReader(Opener(source, key), CHUNK) as plain:
             with tarfile.open(fileobj=plain, mode='r|zst') as tar:
@@ -219,11 +220,11 @@ def unpack(blob, key, cargo_home, target):
                         raise ValueError('Unexpected cache member')
                     member.name = rest
                     tar.extract(member, dest, filter='data')
-        return True
-    except Exception:
+        return None
+    except Exception as error:
         for part in cargo_parts(cargo_home) + [target]:
             _remove(part)
-        return False
+        return type(error).__name__
 
 
 def key_from_env():

@@ -197,9 +197,10 @@ def restore_cache(key):
     if key is None or not CACHE_BLOB.is_file():
         print("Cache: none", flush=True)
         return
-    restored = cache.unpack(CACHE_BLOB, key, cargo_home(), TARGET)
+    error = cache.unpack(CACHE_BLOB, key, cargo_home(), TARGET)
     CACHE_BLOB.unlink(missing_ok=True)
-    print("Cache: " + ("restored" if restored else "unusable"), flush=True)
+    # Only the error type: messages can hold private paths.
+    print("Cache: " + ("restored" if error is None else "unusable (" + error + ")"), flush=True)
 
 
 def save_cache(key, workspace):
@@ -207,15 +208,18 @@ def save_cache(key, workspace):
     if key is None or os.environ.get("CACHE_SAVE") != "1":
         return
     try:
-        metadata = run(["cargo", "metadata", "--format-version", "1", "--locked"], workspace, capture=True)
+        output = run(["cargo", "metadata", "--format-version", "1", "--locked"], workspace, capture=True)
+        # Captured output merges stderr, where Cargo may report downloads.
+        metadata = next(line for line in output.splitlines() if line.startswith(b"{"))
         cache.prune(TARGET, cache.third_party(json.loads(metadata)))
         cache.pack(CACHE_BLOB, key, cargo_home(), TARGET)
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
             output.write("cache=written\n")
         print("Cache: sealed", flush=True)
-    except Exception:
+    except Exception as error:
         CACHE_BLOB.unlink(missing_ok=True)
-        print("Cache: not saved", flush=True)
+        # Only the error type: messages can hold private paths.
+        print("Cache: not saved (" + type(error).__name__ + ")", flush=True)
 
 
 def cargo_home():

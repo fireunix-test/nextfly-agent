@@ -96,13 +96,13 @@ class PackTests(unittest.TestCase):
             cache.pack(blob, KEY, home, target)
             self.assertNotIn(b'rlibrlib', blob.read_bytes())
             new_home, new_target = root / 'h2', root / 't2'
-            self.assertTrue(cache.unpack(blob, KEY, new_home, new_target))
+            self.assertIsNone(cache.unpack(blob, KEY, new_home, new_target))
             self.assertEqual((new_home / 'registry' / 'cache' / 'a.crate').read_bytes(), b'crate')
             self.assertEqual((new_target / 'debug' / 'deps' / 'x.rlib').read_bytes(), b'rlib' * 1000)
             self.assertFalse((new_home / 'bin').exists())
             # A wrong key restores nothing and leaves no partial state.
             other_home, other_target = root / 'h3', root / 't3'
-            self.assertFalse(cache.unpack(blob, bytes(32), other_home, other_target))
+            self.assertEqual(cache.unpack(blob, bytes(32), other_home, other_target), 'InvalidTag')
             self.assertFalse((other_home / 'registry').exists() or other_target.exists())
 
 
