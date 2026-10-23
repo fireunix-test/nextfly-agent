@@ -48,7 +48,13 @@ jobs:
         uses: ilammy/setup-nasm@e77cc62a22a374a4d0668286007cc3e3b4c17760 # v1
       - if: runner.os == 'Linux'
         name: Install Valgrind before fetching source
-        run: sudo apt-get update -q && sudo apt-get install -y -q valgrind
+        # A slow mirror once held this step for seven minutes: time out
+        # stalled downloads and retry them, and skip recommended packages.
+        timeout-minutes: 5
+        run: |
+          apt="-o Acquire::http::Timeout=20 -o Acquire::Retries=3 -q"
+          sudo apt-get $apt update
+          sudo apt-get $apt install -y --no-install-recommends valgrind
       - name: Mint a read-only token for the private source
         id: source
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
