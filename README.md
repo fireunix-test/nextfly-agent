@@ -2,8 +2,26 @@
 
 This public repository contains CI orchestration only. Private source is fetched at
 an exact validated merge revision onto ephemeral GitHub-hosted runners. Source,
-raw logs, caches, diagnostics and build artifacts are never uploaded here. Only
-trusted same-repository pull requests and current main are accepted.
+raw logs, diagnostics and build artifacts are never uploaded here, and build
+caches only encrypted (below). Only trusted same-repository pull requests and
+current main are accepted.
+
+## Encrypted build caches
+
+Any workflow running in a public repository can restore its Actions caches,
+including one that a pull request from a fork brings along, and compiled output
+can be reverse engineered. A cache therefore holds only third-party build output
+(registry and Git dependencies, BoringSSL above all) and Cargo's download cache:
+`scripts/cache.py` deletes everything built from path packages, the private
+crates, then seals the rest with AES-256-GCM under the `CACHE_KEY` secret (32
+random bytes, base64), which such workflows never receive. Chunks are
+authenticated in order, so a tampered or truncated blob is rejected and the job
+builds from scratch.
+
+Keys combine the platform, the job kind (`check`, `fuzz`), the exact compiler and
+the revision's lockfile; a lockfile change restores the newest cache of the same
+compiler, and the job saves a new one. Only fuzz shard 1 saves. Builds use a fixed
+target directory outside the checkout and no incremental compilation.
 
 ## Credentials and reports
 
@@ -61,8 +79,8 @@ fail closed after three minutes. A fresh run/attempt uses a different lock.
 
 Output capture prevents accidental disclosure; it is not a sandbox for hostile
 code. Only trusted contributors may submit builds, and only trusted maintainers may
-change or dispatch these workflows. Do not enable debug logging, source caches,
-artifact uploads or raw diagnostic output. Actions are pinned to reviewed commits.
+change or dispatch these workflows. Do not enable debug logging, unencrypted
+caches, artifact uploads or raw diagnostic output. Actions are pinned to reviewed commits.
 
 ## Triggering and retrying
 
@@ -86,11 +104,12 @@ without `retry_pr` afterward for immediate status reconciliation. Prefer all job
 not failed jobs only, so the new report attempt includes every platform. New
 commits or changes to the merge revision trigger fresh CI automatically.
 
-Completion verifies three named platform checks and every fuzz target in the
-**tested revision's** `fuzz/Cargo.toml`, not a hard-coded job count. New targets
-must also be added to the public workflow matrix. Missing checks and skipped
+Completion verifies three named platform checks and four fuzz shards. Each shard
+builds the fuzz crate once and runs every fourth target of the **tested
+revision's** `fuzz/Cargo.toml` for 60 seconds, so new targets need no workflow
+change; the private report names each failing target. Missing checks and skipped
 required checks fail closed; extra orchestration jobs do not alter the required
-set. Matrix targets absent from older source revisions are not applicable.
+set.
 
 ## Local validation
 

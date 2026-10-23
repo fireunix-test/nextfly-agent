@@ -26,9 +26,9 @@ def redact(text, environment=None, root=None):
             text = text.replace(variant.rstrip('/\\')+'/', '').replace(variant.rstrip('/\\')+'\\', '')
     values = []
     for key, value in env.items():
-        if value and (key.startswith(('GITHUB_', 'RUNNER_', 'ACTIONS_')) or any(word in key.upper() for word in ('TOKEN','SECRET','PASSWORD','REPORT_KEY'))):
+        if value and (key.startswith(('GITHUB_', 'RUNNER_', 'ACTIONS_')) or any(word in key.upper() for word in ('TOKEN','SECRET','PASSWORD','REPORT_KEY','CACHE_KEY'))):
             values.append(value)
-            if any(word in key.upper() for word in ('TOKEN','SECRET','PASSWORD','REPORT_KEY')):
+            if any(word in key.upper() for word in ('TOKEN','SECRET','PASSWORD','REPORT_KEY','CACHE_KEY')):
                 values.extend([base64.b64encode(value.encode()).decode(), base64.b64encode(('x-access-token:'+value).encode()).decode()])
     for value in sorted(set(values), key=len, reverse=True):
         # Short metadata values need token boundaries to preserve normal words.

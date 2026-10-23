@@ -14,17 +14,25 @@ import tempfile
 import tomllib
 import urllib.request
 
+import cache
+from checks import FUZZ_SHARDS
 from diagnostics import bounded, extract, redact
 
 SOURCE = "fireunix-nextfly/agent"
-TARGETS = "bencode_decode krpc_decode bt_wire torrent_info metainfo utp_conn client_hello ja3_import http1_response proxy_reply content_range content_disposition ftp_reply m3u8 bt_mse bt_pex bt_peer tracker_http tracker_udp nat_ssdp nat_upnp nat_pcp bt_holepunch bt_lsd thunder_wire thunder_transport".split()
+FUZZ_TRIPLE = "x86_64-unknown-linux-gnu"
+# Outside the checkout, at a fixed place, so a restored cache lines up.
+TARGET = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "ci-target"
+CACHE_BLOB = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "ci-cache" / "blob.bin"
 
 
 def child_env():
     """Remove credentials and Actions file-command channels from child processes."""
-    return {k: v for k, v in os.environ.items()
-            if not k.startswith(("GITHUB_", "RUNNER_", "ACTIONS_", "INPUT_", "SOURCE_", "BUILDER_", "REPORT_", "GIT_CONFIG_"))
-            and k not in ("GH_TOKEN", "GH_ENTERPRISE_TOKEN", "REQUEST_ID", "PR_NUMBER", "HEAD_SHA")}
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("GITHUB_", "RUNNER_", "ACTIONS_", "INPUT_", "SOURCE_", "BUILDER_", "REPORT_", "GIT_CONFIG_", "CACHE_"))
+           and k not in ("GH_TOKEN", "GH_ENTERPRISE_TOKEN", "REQUEST_ID", "PR_NUMBER", "HEAD_SHA")}
+    # Clean CI builds gain nothing from incremental state, which caches would carry.
+    env.update(CARGO_TARGET_DIR=str(TARGET), CARGO_INCREMENTAL="0")
+    return env
 
 
 class CommandFailure(RuntimeError):
@@ -102,15 +110,16 @@ def validate(token):
 
 
 def stage(name, args, root, capture=False, target=None):
-    print(name + ": running", flush=True)
+    label = name + (" (" + target + ")" if target else "")
+    print(label + ": running", flush=True)
     try:
         result = run(args, root, capture=capture, timeout=2400 if name == "Tests" else 1200)
     except CommandFailure as failure:
         summary = extract(name, failure.output, failure.code, failure.timeout, target, root)
-        FAILURES.append({"stage": name, "summary": bounded(redact(summary, ENVIRONMENT, root))})
-        print(name + ": failed", flush=True)
+        FAILURES.append({"stage": label, "summary": bounded(redact(summary, ENVIRONMENT, root))})
+        print(label + ": failed", flush=True)
         return None
-    print(name + ": passed", flush=True)
+    print(label + ": passed", flush=True)
     return result
 
 
@@ -183,15 +192,49 @@ def save_summary():
     path.chmod(0o600)
 
 
+def restore_cache(key):
+    """Unseals the cache the workflow restored, if any; a failure only costs time."""
+    if key is None or not CACHE_BLOB.is_file():
+        print("Cache: none", flush=True)
+        return
+    restored = cache.unpack(CACHE_BLOB, key, cargo_home(), TARGET)
+    CACHE_BLOB.unlink(missing_ok=True)
+    print("Cache: " + ("restored" if restored else "unusable"), flush=True)
+
+
+def save_cache(key, workspace):
+    """Seals third-party build output for the workflow to save."""
+    if key is None or os.environ.get("CACHE_SAVE") != "1":
+        return
+    try:
+        metadata = run(["cargo", "metadata", "--format-version", "1", "--locked"], workspace, capture=True)
+        cache.prune(TARGET, cache.third_party(json.loads(metadata)))
+        cache.pack(CACHE_BLOB, key, cargo_home(), TARGET)
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+            output.write("cache=written\n")
+        print("Cache: sealed", flush=True)
+    except Exception:
+        CACHE_BLOB.unlink(missing_ok=True)
+        print("Cache: not saved", flush=True)
+
+
+def cargo_home():
+    return Path(os.environ.get("CARGO_HOME") or Path.home() / ".cargo")
+
+
 def main():
     global FUZZ_TARGETS
     token = os.environ.pop("SOURCE_TOKEN")
+    key = cache.key_from_env()
+    os.environ.pop("CACHE_KEY", None)
     sha = validate(token)
     mode = sys.argv[1]
     if mode not in ("check", "fuzz"):
         raise ValueError("Invalid mode")
-    if mode == "fuzz" and sys.argv[2] not in TARGETS:
-        raise ValueError("Invalid target")
+    if mode == "fuzz":
+        shard = int(sys.argv[2])
+        if not 1 <= shard <= FUZZ_SHARDS:
+            raise ValueError("Invalid shard")
     root = Path(tempfile.mkdtemp(prefix="private-ci-", dir=os.environ.get("RUNNER_TEMP")))
     try:
         run(["git", "init", "--quiet", str(root)], root)
@@ -205,16 +248,22 @@ def main():
         del token, auth, env
         run(["git", "checkout", "--quiet", "--detach", "FETCH_HEAD"], root)
         print("Source preparation: passed", flush=True)
+        restore_cache(key)
         with (root / "fuzz/Cargo.toml").open("rb") as manifest:
             FUZZ_TARGETS = sorted({item["name"] for item in tomllib.load(manifest).get("bin", [])})
         if mode == "fuzz":
-            targets = set(FUZZ_TARGETS)
-            if sys.argv[2] not in targets:
-                # Older revisions do not contain targets introduced by later PRs.
-                print("Fuzz: not applicable to this revision", flush=True)
+            # Every target in the revision's manifest falls to exactly one shard,
+            # so new targets need no workflow change.
+            mine = FUZZ_TARGETS[shard - 1::FUZZ_SHARDS]
+            if not mine:
+                print("Fuzz: no targets in this shard", flush=True)
                 return
-            stage("Fuzz", ["cargo", "+nightly", "fuzz", "run", "--target", "x86_64-unknown-linux-gnu",
-                           sys.argv[2], "--", "-max_total_time=60"], root, target=sys.argv[2])
+            fuzz = ["cargo", "+nightly", "fuzz"]
+            options = ["--target", FUZZ_TRIPLE, "--target-dir", str(TARGET)]
+            # Built once; each run then reuses the build.
+            if stage("Fuzz build", fuzz + ["build", *options], root) is not None:
+                for target in mine:
+                    stage("Fuzz", fuzz + ["run", *options, target, "--", "-max_total_time=60"], root, target=target)
         else:
             if sys.platform.startswith("linux"):
                 stage("Formatting", ["cargo", "fmt", "--all", "--check"], root)
@@ -241,8 +290,11 @@ def main():
                 if not executable:
                     FAILURES.append({"stage":"Network namespaces", "summary":"Load test executable unavailable; preceding build failed."})
                     return
-                stage("Network namespaces", ["sudo", "bash", "scripts/netns-load.sh", str(root / "target/release/examples/dht_server"), executable, "2"], root)
+                stage("Network namespaces", ["sudo", "bash", "scripts/netns-load.sh", str(TARGET / "release/examples/dht_server"), executable, "2"], root)
     finally:
+        # Also after failures: dependencies built before a failing stage are valid.
+        if (root / "Cargo.toml").is_file():
+            save_cache(key, root / "fuzz" if mode == "fuzz" else root)
         def remove_readonly(function, path, _error):
             # Git pack files can be read-only on Windows.
             os.chmod(path, stat.S_IWRITE | stat.S_IREAD)

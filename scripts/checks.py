@@ -4,12 +4,16 @@ import re
 import tomllib
 
 PLATFORMS = ('ubuntu-latest', 'macos-latest', 'windows-latest')
+# Fuzz jobs; each builds the fuzz crate once and runs every FUZZ_SHARDS-th
+# target of the tested revision's manifest, so all targets are always covered.
+FUZZ_SHARDS = 4
 
 
 def required_names(targets):
     if not all(isinstance(t, str) and re.fullmatch(r'[a-zA-Z0-9_-]+', t) for t in targets):
         raise ValueError('Invalid fuzz manifest')
-    return {f'check ({p})' for p in PLATFORMS} | {f'fuzz ({t})' for t in targets}
+    return ({f'check ({p})' for p in PLATFORMS}
+            | {f'fuzz ({i}/{FUZZ_SHARDS})' for i in range(1, FUZZ_SHARDS + 1)})
 
 
 def manifest_names(response):

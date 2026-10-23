@@ -20,6 +20,8 @@ concurrency:
   cancel-in-progress: false
 permissions:
   contents: write
+env:
+  REPORT_EXPECTED: '["check (ubuntu-latest)", "check (macos-latest)", "check (windows-latest)", "fuzz (1/4)", "fuzz (2/4)", "fuzz (3/4)", "fuzz (4/4)"]'
 jobs:
   check:
     if: github.ref == 'refs/heads/main'
@@ -35,7 +37,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: '3.12'
+          python-version: '3.14'
+      - name: Install cache encryption
+        run: python -m pip install --disable-pip-version-check --quiet cryptography==50.0.2
       - name: Install Rust tools before fetching source
         run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
       - name: Select stable Rust
@@ -55,16 +59,38 @@ jobs:
           repositories: agent
           permission-contents: read
           permission-pull-requests: read
+      - name: Compute the cache key
+        id: key
+        env:
+          SOURCE_TOKEN: ${{ steps.source.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          CACHE_KIND: check
+        run: python scripts/cache.py
+      - name: Restore the encrypted cache
+        id: restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ci-cache
+          key: ${{ steps.key.outputs.key }}
+          restore-keys: ${{ steps.key.outputs.prefix }}
       - name: Run private checks
         id: build
         env:
           SOURCE_TOKEN: ${{ steps.source.outputs.token }}
+          CACHE_KEY: ${{ secrets.CACHE_KEY }}
+          CACHE_SAVE: ${{ steps.restore.outputs.cache-hit != 'true' && '1' || '0' }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           HEAD_SHA: ${{ inputs.head_sha }}
           PR_NUMBER: ${{ inputs.pr_number }}
           REPORT_JOB: ${{ format('check ({0})', matrix.os) }}
           REPORT_PLATFORM: ${{ matrix.os }}
         run: python scripts/build.py check
+      - name: Save the encrypted cache
+        if: always() && steps.build.outputs.cache == 'written'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ci-cache
+          key: ${{ steps.key.outputs.key }}
       - name: Mint a token for the private report
         if: always() && inputs.pr_number != '0'
         id: report
@@ -87,23 +113,26 @@ jobs:
           BUILD_OUTCOME: ${{ steps.build.outcome }}
           REPORT_JOB: ${{ format('check ({0})', matrix.os) }}
           REPORT_PLATFORM: ${{ matrix.os }}
-          REPORT_EXPECTED: '["check (ubuntu-latest)", "check (macos-latest)", "check (windows-latest)", "fuzz (bencode_decode)", "fuzz (krpc_decode)", "fuzz (bt_wire)", "fuzz (torrent_info)", "fuzz (metainfo)", "fuzz (utp_conn)", "fuzz (client_hello)", "fuzz (ja3_import)", "fuzz (http1_response)", "fuzz (proxy_reply)", "fuzz (content_range)", "fuzz (content_disposition)", "fuzz (ftp_reply)", "fuzz (m3u8)", "fuzz (bt_mse)", "fuzz (bt_pex)", "fuzz (bt_peer)", "fuzz (tracker_http)", "fuzz (tracker_udp)", "fuzz (nat_ssdp)", "fuzz (nat_upnp)", "fuzz (nat_pcp)", "fuzz (bt_holepunch)", "fuzz (bt_lsd)", "fuzz (thunder_wire)", "fuzz (thunder_transport)"]'
         run: python scripts/report.py
   fuzz:
     if: github.ref == 'refs/heads/main'
+    name: fuzz (${{ matrix.shard }}/4)
     timeout-minutes: 120
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        target: [bencode_decode, krpc_decode, bt_wire, torrent_info, metainfo, utp_conn, client_hello, ja3_import, http1_response, proxy_reply, content_range, content_disposition, ftp_reply, m3u8, bt_mse, bt_pex, bt_peer, tracker_http, tracker_udp, nat_ssdp, nat_upnp, nat_pcp, bt_holepunch, bt_lsd, thunder_wire, thunder_transport]
+        # Must match FUZZ_SHARDS in scripts/checks.py.
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: '3.12'
+          python-version: '3.14'
+      - name: Install cache encryption
+        run: python -m pip install --disable-pip-version-check --quiet cryptography==50.0.2
       - name: Install nightly Rust before fetching source
         run: rustup toolchain install nightly --profile minimal
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
@@ -119,17 +148,40 @@ jobs:
           repositories: agent
           permission-contents: read
           permission-pull-requests: read
-      - name: Run private fuzz smoke test
-        id: build
+      - name: Compute the cache key
+        id: key
         env:
           SOURCE_TOKEN: ${{ steps.source.outputs.token }}
           SOURCE_SHA: ${{ inputs.source_sha }}
+          CACHE_KIND: fuzz
+        run: python scripts/cache.py
+      - name: Restore the encrypted cache
+        id: restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ci-cache
+          key: ${{ steps.key.outputs.key }}
+          restore-keys: ${{ steps.key.outputs.prefix }}
+      - name: Run private fuzz smoke tests
+        id: build
+        env:
+          SOURCE_TOKEN: ${{ steps.source.outputs.token }}
+          CACHE_KEY: ${{ secrets.CACHE_KEY }}
+          # The shards build the same thing; one of them saves it.
+          CACHE_SAVE: ${{ matrix.shard == 1 && steps.restore.outputs.cache-hit != 'true' && '1' || '0' }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
           HEAD_SHA: ${{ inputs.head_sha }}
           PR_NUMBER: ${{ inputs.pr_number }}
-          REPORT_JOB: ${{ format('fuzz ({0})', matrix.target) }}
+          REPORT_JOB: ${{ format('fuzz ({0}/4)', matrix.shard) }}
           REPORT_PLATFORM: ubuntu-latest
-          FUZZ_TARGET: ${{ matrix.target }}
-        run: python scripts/build.py fuzz "$FUZZ_TARGET"
+          FUZZ_SHARD: ${{ matrix.shard }}
+        run: python scripts/build.py fuzz "$FUZZ_SHARD"
+      - name: Save the encrypted cache
+        if: always() && steps.build.outputs.cache == 'written'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ci-cache
+          key: ${{ steps.key.outputs.key }}
       - name: Mint a token for the private report
         if: always() && inputs.pr_number != '0'
         id: report
@@ -150,7 +202,6 @@ jobs:
           HEAD_SHA: ${{ inputs.head_sha }}
           PR_NUMBER: ${{ inputs.pr_number }}
           BUILD_OUTCOME: ${{ steps.build.outcome }}
-          REPORT_JOB: ${{ format('fuzz ({0})', matrix.target) }}
+          REPORT_JOB: ${{ format('fuzz ({0}/4)', matrix.shard) }}
           REPORT_PLATFORM: ubuntu-latest
-          REPORT_EXPECTED: '["check (ubuntu-latest)", "check (macos-latest)", "check (windows-latest)", "fuzz (bencode_decode)", "fuzz (krpc_decode)", "fuzz (bt_wire)", "fuzz (torrent_info)", "fuzz (metainfo)", "fuzz (utp_conn)", "fuzz (client_hello)", "fuzz (ja3_import)", "fuzz (http1_response)", "fuzz (proxy_reply)", "fuzz (content_range)", "fuzz (content_disposition)", "fuzz (ftp_reply)", "fuzz (m3u8)", "fuzz (bt_mse)", "fuzz (bt_pex)", "fuzz (bt_peer)", "fuzz (tracker_http)", "fuzz (tracker_udp)", "fuzz (nat_ssdp)", "fuzz (nat_upnp)", "fuzz (nat_pcp)", "fuzz (bt_holepunch)", "fuzz (bt_lsd)", "fuzz (thunder_wire)", "fuzz (thunder_transport)"]'
         run: python scripts/report.py

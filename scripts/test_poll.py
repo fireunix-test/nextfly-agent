@@ -52,5 +52,7 @@ class RequiredNamesTests(unittest.TestCase):
         required=manifest_names({'content':base64.b64encode(b'[[bin]]\nname="tracker_http"\n[[bin]]\nname="tracker_udp"').decode()})
         jobs=[{'name':name,'conclusion':'success'} for name in required]
         self.assertTrue(successful(jobs+[{'name':'setup','conclusion':'success'}],required))
-        self.assertFalse(successful([j for j in jobs if j['name']!='fuzz (tracker_udp)'],required))
+        self.assertEqual({j['name'] for j in jobs if j['name'].startswith('fuzz')},
+                         {'fuzz (1/4)','fuzz (2/4)','fuzz (3/4)','fuzz (4/4)'})
+        self.assertFalse(successful([j for j in jobs if j['name']!='fuzz (2/4)'],required))
         self.assertFalse(successful(jobs+[jobs[0]],required))
