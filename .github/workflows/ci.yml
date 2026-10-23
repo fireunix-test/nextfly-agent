@@ -61,20 +61,8 @@ jobs:
           key: ${{ steps.valgrind-key.outputs.key }}
       - if: runner.os == 'Linux'
         name: Install Valgrind before fetching source
-        # A slow mirror once held this step for seven minutes: time out
-        # stalled downloads and retry them, and skip recommended packages.
-        timeout-minutes: 5
-        env:
-          DEBS: .valgrind-debs
-        run: |
-          if ls "$DEBS"/*.deb >/dev/null 2>&1 && sudo dpkg -i "$DEBS"/*.deb; then
-            exit 0
-          fi
-          apt="-o Acquire::http::Timeout=20 -o Acquire::Retries=3 -o APT::Keep-Downloaded-Packages=true -q"
-          sudo apt-get $apt update
-          sudo apt-get $apt install -y --no-install-recommends valgrind
-          rm -rf "$DEBS" && mkdir -p "$DEBS"
-          cp /var/cache/apt/archives/*.deb "$DEBS"/ 2>/dev/null || true
+        timeout-minutes: 8
+        run: bash scripts/install-valgrind.sh .valgrind-debs
       - if: runner.os == 'Linux' && steps.valgrind.outputs.cache-hit != 'true' && hashFiles('.valgrind-debs/*.deb') != ''
         name: Save the Valgrind packages
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
