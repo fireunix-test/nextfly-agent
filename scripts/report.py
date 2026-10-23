@@ -171,7 +171,9 @@ if __name__ == '__main__':
     try:
         main()
         print('Private PR report: passed', flush=True)
-    except BaseException:
-        # API responses and exceptions can contain private comment bodies.
-        print('Private PR report: failed', flush=True)
+    except BaseException as error:
+        # API responses and exceptions can contain private comment bodies:
+        # only the error type and HTTP status are printed.
+        status = f' {error.code}' if isinstance(error, urllib.error.HTTPError) else ''
+        print('Private PR report: failed (' + type(error).__name__ + status + ')', flush=True)
         sys.exit(1)
