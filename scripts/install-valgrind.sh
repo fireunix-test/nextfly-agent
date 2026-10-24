@@ -29,14 +29,31 @@ sudo apt-get -q -o Acquire::http::Timeout=20 -o Acquire::Retries=3 update >/dev/
 uris=$(sudo apt-get install -qq --print-uris --no-install-recommends valgrind)
 [ -n "$uris" ] || { echo "Valgrind: nothing to download"; exit 0; }
 
+# A line this script cannot fetch by itself (another repository layout, no
+# SHA-2 sum) leaves the whole install to apt, slow mirrors and all, rather
+# than failing the job; the line is printed so the script can learn it.
+unexpected=0
+while read -r uri file _ sum; do
+  path=$(sed -E "s#^'.*/(pool/.*)'\$#\1#" <<<"$uri")
+  if [[ $path != pool/* || ! ${sum%%:*} =~ ^SHA(512|256)$ ]]; then
+    echo "Valgrind: unexpected package line: $uri $file $sum"
+    unexpected=1
+  fi
+done <<<"$uris"
+if (( unexpected )); then
+  rm -rf "$debs"
+  sudo apt-get install -y -q -o Acquire::http::Timeout=20 -o Acquire::Retries=3 \
+    --no-install-recommends valgrind >/dev/null
+  echo "Valgrind: installed by apt"
+  exit 0
+fi
+
 while read -r uri file _ sum; do
   path=$(sed -E "s#^'.*/(pool/.*)'\$#\1#" <<<"$uri")
   case ${sum%%:*} in
     SHA512) check=sha512sum ;;
-    SHA256) check=sha256sum ;;
-    *) check= ;;
+    *) check=sha256sum ;;
   esac
-  [[ $path == pool/* && -n $check ]] || { echo "Valgrind: unexpected package list"; exit 1; }
   for mirror in "${mirrors[@]}"; do
     # Give up on a mirror that drops below 100 KB/s for 15 seconds.
     if curl -fsSL --connect-timeout 10 --speed-limit 102400 --speed-time 15 --max-time 120 \
